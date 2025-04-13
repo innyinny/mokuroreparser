@@ -80,6 +80,8 @@ def process_file(entry):
 
     # json path
     jsonpath = "/".join(pathparts[:-2] + ['_ocr'] + pathparts[-2:]) + ".json";
+    if(not os.path.isfile(jsonpath)):
+        jsonpath = "/".join(pathparts[:-1] + ['_ocr'] + pathparts[-1:]) + ".json";
 
     # caption path
     captpath = "/".join(pathparts[:-1] + ['captions'] + pathparts[-1:]) + ".txt";
