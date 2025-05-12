@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/bin/env python3
 
 import os;
 import argparse;
@@ -99,7 +99,10 @@ def process_file(entry):
         return;
 
     # get the data from the mokuro json file
-    blocks = process_file_json(jsonpath);
+    try:
+        blocks = process_file_json(jsonpath);
+    except FileNotFoundError as e:
+        return;
     if(args.manual):
         blocks = step_translate_blocks(blocks);
     elif(args.offline):
