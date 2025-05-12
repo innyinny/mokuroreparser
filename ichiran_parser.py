@@ -1,7 +1,8 @@
-#!/usr/bin/python3
+#!/bin/env python3
 
 import docker;
 import re;
+import subprocess;
 import io, sys;
 
 class Ichiran(object):
@@ -22,10 +23,20 @@ class Ichiran(object):
         cmd = f'ichiran-cli -i "{rawtext}"';
         print(cmd);
 
-        (ret, res) = self.instance.exec_run(cmd)
-        if(ret):
-            return None;
-        return res.decode('utf8');
+        # docker mode
+        if(self.instance):
+            (ret, res) = self.instance.exec_run(cmd)
+            if(ret):
+                return None;
+            return res.decode('utf8');
+        # local mode
+        else:
+            cmd = ['ichiran-cli', '-i', rawtext];
+            result = subprocess.run(cmd, capture_output=True, text=True);
+            if(result.returncode):
+                return None;
+            return result.stdout;
+
 
     @staticmethod
     def parse_result(res, buffer=sys.stdout):
@@ -84,10 +95,12 @@ class Ichiran(object):
 
 
 def get_ichiran():
-    client = docker.from_env();
-    ichiran = client.containers.get('ichiran_main_1')
-    return Ichiran(ichiran);
-
+    # for docker
+    #client = docker.from_env();
+    #ichiran = client.containers.get('ichiran_main_1')
+    #return Ichiran(ichiran);
+    # for local
+    return Ichiran(None);
 
 def main_test():
     ichiran = get_ichiran()
