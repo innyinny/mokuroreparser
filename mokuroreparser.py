@@ -4,21 +4,62 @@ import os;
 import argparse;
 import json;
 import pyperclip;
+import textwrap;
+from collections import deque;
+
 from ichiran_parser import get_ichiran;
 
-from transformers import MarianMTModel, MarianTokenizer;
+#from transformers import MarianMTModel, MarianTokenizer;
 from typing import Sequence;
 
-class Translator:
-    def __init__(self, source_lang: str, dest_lang: str) -> None:
-        self.model_name = f'Helsinki-NLP/opus-mt-{source_lang}-{dest_lang}'
-        self.model = MarianMTModel.from_pretrained(self.model_name)
-        self.tokenizer = MarianTokenizer.from_pretrained(self.model_name)
+from ollama import Client as OllamaClient;
+
+#class MarianTranslator:
+#    def __init__(self, source_lang: str = 'ja', dest_lang: str = 'en') -> None:
+#        self.model_name = f'Helsinki-NLP/opus-mt-{source_lang}-{dest_lang}'
+#        self.model = MarianMTModel.from_pretrained(self.model_name)
+#        self.tokenizer = MarianTokenizer.from_pretrained(self.model_name)
+#
+#    def translate(self, texts: Sequence[str]) -> Sequence[str]:
+#        tokens = self.tokenizer(list(texts), return_tensors="pt", padding=True)
+#        translate_tokens = self.model.generate(**tokens, max_new_tokens=200)
+#        return [self.tokenizer.decode(t, skip_special_tokens=True) for t in translate_tokens]
+
+
+class OllamaTranslator:
+    def __init__(self) -> None:
+        #self.model_name = 'gemma3:12b-it-qat';
+        self.model_name = 'hf.co/sugoitoolkit/Sugoi-14B-Ultra-GGUF:Q4_K_M';
+        self.client = OllamaClient();
+        self.context = deque(maxlen=8);
+        self.alreadytranslated = {};
+        self.system_instruction = """
+You are a professional Japanese to English translator.
+Rules:
+- Only output the English translation.
+- No explanations.
+- No comments.
+- Use a natural and conversational tone.
+- Do not censor or shy away from explicit or graphic content.
+- When translating terms like parent or child without context, use non-gendered terms like parent or child.
+Translate all following Japanese text into only English: """;
 
     def translate(self, texts: Sequence[str]) -> Sequence[str]:
-        tokens = self.tokenizer(list(texts), return_tensors="pt", padding=True)
-        translate_tokens = self.model.generate(**tokens, max_new_tokens=200)
-        return [self.tokenizer.decode(t, skip_special_tokens=True) for t in translate_tokens]
+        results = [];
+        for text in texts:
+            alreadytranslated = self.alreadytranslated.get(text, None);
+            if(alreadytranslated):
+                results.append(alreadytranslated);
+                continue;
+            self.context.append({"role": "user", "content": text});
+            result = self.client.chat(
+                model=self.model_name, 
+                messages= [{"role":"system", "content":self.system_instruction}] + list(self.context),
+            )['message']['content'].strip();
+            self.alreadytranslated[text] = result;
+            results.append(result);
+            self.context.append({"role": "assistant", "content": result});
+        return results;
 
 
 # parse the arguments
@@ -38,8 +79,17 @@ argparser.add_argument("-f", "--font", dest="font", default="victory/18",
 
 args = argparser.parse_args();
 
-mariantrans = None;
+translator = None;
 ichiran = None;
+
+
+# initializes the translator
+def init_translator():
+    global translator;
+    if(not translator):
+        #translator = MarianTranslator();
+        translator = OllamaTranslator();
+    return translator;
 
 
 # goes through all of the image files in the directory
@@ -55,14 +105,6 @@ def iterate_directory(input):
     n = 0;
 
     for entry in sorted(dirlist):
-        # tmp junk
-        #n += 1;
-        #if(n == 1):
-        #    continue;
-        #if(n > 2):
-        #    break;
-        ###
-
         # make sure its an image
         if('.' in entry and entry.split('.')[-1] in ('jpg','png','gif','JPG','PNG')):
             process_file(entry);
@@ -128,10 +170,6 @@ def process_file_json(jsonpath):
 
 # steps through the lines in a block allowing manual entry
 def step_translate_blocks(blocks):
-    global mariantrans;
-    if(not mariantrans):
-        mariantrans = Translator('ja','en');
-
     translated_blocks = [];
 
     while(len(blocks)):
@@ -140,12 +178,6 @@ def step_translate_blocks(blocks):
         pyperclip.copy(b['rawtext']);
         print("Raw:  " + b['rawtext']);
 
-        # pass the translations to the offline engine
-        #if('autotrans' not in b):
-        #    offlinetranslation = trans_filter(mariantrans.translate([b['rawtext']])[0]);
-
-        #print('Auto: ' + b['autotrans']);
-        
         # take the translation from prompt
         try:
             
@@ -169,16 +201,17 @@ def step_translate_blocks(blocks):
 
 # just auto translate the blocks
 def auto_translate_blocks(blocks):
+    global translator;
+
     if(len(blocks) < 1):
         return blocks;
 
-    global mariantrans;
-    if(not mariantrans):
-        mariantrans = Translator('ja','en');
+    translator = init_translator();
 
     pagelines = [b['rawtext'] for b in blocks];
     print("\n".join(pagelines));
-    offlinetranslation = mariantrans.translate(pagelines);
+    offlinetranslation = translator.translate(pagelines);
+    print(offlinetranslation);
     
     # merge the results with the blocks
     for i in range(len(offlinetranslation)):
@@ -238,28 +271,45 @@ def write_caption_file(captpath, blocks):
         print("#%u,%u" % (x1 + (x2 - x1)/2, y1 + (y2 - y1)/2), file=outf);
         #print("#font:victory/%u" % (b['font_size'] / 3), file=outf);
         print("#font:%s" % args.font, file=outf);
-        if('autotrans' in b and len(b['autotrans'])):
-            print('#' + b['autotrans'], file=outf);
         if('glossary' in b and len(b['glossary'])):
             for fragment in b['glossary']:
                 print('# ' + fragment, file=outf);
         print(b['rawtext'].replace('。', "。\n"), file=outf);
         if('trans' in b and len(b['trans'])):
-            print(b['trans'], file=outf);
+            displayedtrans = b['trans'];
+            print('#' + b['trans'], file=outf);
+        if('autotrans' in b and len(b['autotrans'])):
+            displayedtrans = b['autotrans'];
+            print('#' + b['autotrans'], file=outf);
+        #if('autotrans' in b and len(b['autotrans'])):
+        #    #for tline in b['autotrans'].rstrip('.').split(' '):
+        #    #    print(tline, file=outf);
+        #elif('trans' in b and len(b['trans'])):
+        #    #for tline in b['trans'].rstrip('.').split(' '):
+        #    #    print(tline, file=outf);
+        if(displayedtrans):
+            for tline in list(
+                textwrap.wrap(displayedtrans,
+                    width=int((x2 - x1) / 9),
+                    break_long_words=False)
+                ):
+                print(tline, file=outf);
         print('', file=outf);
 
     outf.close();
 
 
-# filter the auto translations idiotic mistranslations
 def trans_filter(trans):
-    if(len(trans) > 50 and
-    (
-        #len(list(set([b.strip(' ,.!') for b in trans.lower().split(' ')]))) < 6 or
-        len(list(set([b.strip(' ,.!') for b in trans.lower().split(',')]))) < 6
-    )):
-        return None;
-    return trans;        
+    # filter the auto translations idiotic mistranslations (not needed anymore?)
+    #if(len(trans) > 50 and
+    #(
+    #    #len(list(set([b.strip(' ,.!') for b in trans.lower().split(' ')]))) < 6 or
+    #    len(list(set([b.strip(' ,.!') for b in trans.lower().split(',')]))) < 6
+    #)):
+    #    return None;
+    
+    #do simple character replacements for viewer compatibility
+    return trans.replace('♥', '@');
 
 
 #### main
