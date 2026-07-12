@@ -9,40 +9,38 @@ from collections import deque;
 
 from ichiran_parser import get_ichiran;
 
-#from transformers import MarianMTModel, MarianTokenizer;
 from typing import Sequence;
 
-from ollama import Client as OllamaClient;
+from openai import OpenAI;
 
-#class MarianTranslator:
-#    def __init__(self, source_lang: str = 'ja', dest_lang: str = 'en') -> None:
-#        self.model_name = f'Helsinki-NLP/opus-mt-{source_lang}-{dest_lang}'
-#        self.model = MarianMTModel.from_pretrained(self.model_name)
-#        self.tokenizer = MarianTokenizer.from_pretrained(self.model_name)
-#
-#    def translate(self, texts: Sequence[str]) -> Sequence[str]:
-#        tokens = self.tokenizer(list(texts), return_tensors="pt", padding=True)
-#        translate_tokens = self.model.generate(**tokens, max_new_tokens=200)
-#        return [self.tokenizer.decode(t, skip_special_tokens=True) for t in translate_tokens]
+strictprompt = """You are a literal Japanese-to-English translation engine. Your goal is structural fidelity, not natural English flow.
+Strict Constraints:
+- PRESERVE ALL NOUNS: Never omit or replace specific nouns (e.g., 母さん，父，先生) with pronouns. If the source says "Mother," you must output "Mother" or "Mom," never "she" or "her." If the noun is repeated in Japanese, repeat it in English.
+- NO ADDED PRONOUNS: Do not add English pronouns (he, she, they, it) unless a specific pronoun (kare, kanojo, watashi, etc.) exists in the source text. If the subject is omitted in Japanese, leave it omitted in English or use the previous noun.
+- GENDER-NEUTRAL TRANSLATION: Translate ambiguous terms like おやこ (oyako) strictly as "parent and child" or "parent-child." Never assume gender. If a pronoun is grammatically unavoidable and no gender is specified, use "they/them" or passive voice.
+- HONORIFICS & TONE: Retain the nuance of honorifics (e.g., translate 母さん as "Mom" or "Mother" depending on context, not just "parent") but do not add gendered assumptions to them.
+- NO SMOOTHING: Do not rephrase sentences to sound more "natural" if it requires adding words not present in the source.
+Output ONLY the translation."""
 
+lightprompt = """You are a professional localizer whose primary goal is to translate Japanese to English. You should use colloquial or slang or nsfw vocabulary if it makes the translation more accurate. Always respond in English."""
 
-class OllamaTranslator:
+mediumprompt = """You are a literal Japanese to English localizer.
+Rules:
+- Use colloquial or slang or nsfw vocabulary if it makes the translation more accurate. 
+- Preserve original nouns and pronouns. Don't replace, add extra, or add gender to pronouns.
+- Always respond in English."""
+
+sugoi32b = 'sugoi-32b-ultra';
+sugoi14b = 'sugoi-14b-ultra-hf-i1';
+
+class OpenAITranslator:
     def __init__(self) -> None:
-        #self.model_name = 'gemma3:12b-it-qat';
-        self.model_name = 'hf.co/sugoitoolkit/Sugoi-14B-Ultra-GGUF:Q4_K_M';
-        self.client = OllamaClient();
+        self.model_name = 'sugoi32b';
+        self.client = OpenAI(base_url='http://localhost:1234/v1', api_key='not-needed');
         self.context = deque(maxlen=8);
         self.alreadytranslated = {};
-        self.system_instruction = """
-You are a professional Japanese to English translator.
-Rules:
-- Only output the English translation.
-- No explanations.
-- No comments.
-- Use a natural and conversational tone.
-- Do not censor or shy away from explicit or graphic content.
-- When translating terms like parent or child without context, use non-gendered terms like parent or child.
-Translate all following Japanese text into only English: """;
+        self.system_instruction = strictprompt;
+
 
     def translate(self, texts: Sequence[str]) -> Sequence[str]:
         results = [];
@@ -52,10 +50,11 @@ Translate all following Japanese text into only English: """;
                 results.append(alreadytranslated);
                 continue;
             self.context.append({"role": "user", "content": text});
-            result = self.client.chat(
-                model=self.model_name, 
+            result = self.client.chat.completions.create(
+                model=self.model_name,
+                temperature = 0.1,
                 messages= [{"role":"system", "content":self.system_instruction}] + list(self.context),
-            )['message']['content'].strip();
+            ).choices[0].message.content.strip();
             self.alreadytranslated[text] = result;
             results.append(result);
             self.context.append({"role": "assistant", "content": result});
@@ -87,8 +86,7 @@ ichiran = None;
 def init_translator():
     global translator;
     if(not translator):
-        #translator = MarianTranslator();
-        translator = OllamaTranslator();
+        translator = OpenAITranslator();
     return translator;
 
 
@@ -290,7 +288,7 @@ def write_caption_file(captpath, blocks):
         if(displayedtrans):
             for tline in list(
                 textwrap.wrap(displayedtrans,
-                    width=int((x2 - x1) / 9),
+                    width=int((x2 - x1) / 9) or 10,
                     break_long_words=False)
                 ):
                 print(tline, file=outf);
